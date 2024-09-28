@@ -6,7 +6,7 @@ import {
   compileCodeSplitReferenceRoute,
   compileCodeSplitVirtualRoute,
 } from './code-splitter/compilers'
-import { splitPrefix } from './constants'
+import { splitToken } from './constants'
 
 import type { Config } from './config'
 import type { UnpluginContextMeta, UnpluginFactory } from 'unplugin'
@@ -55,9 +55,6 @@ plugins: [
 `)
   }
 }
-
-const PLUGIN_NAME = 'unplugin:router-code-splitter'
-const JoinedSplitPrefix = splitPrefix + ':'
 
 export const unpluginRouterCodeSplitterFactory: UnpluginFactory<
   Partial<Config> | undefined
@@ -110,18 +107,6 @@ export const unpluginRouterCodeSplitterFactory: UnpluginFactory<
   return {
     name: 'router-code-splitter-plugin',
     enforce: 'pre',
-
-    resolveId(source) {
-      if (!userConfig.autoCodeSplitting) {
-        return null
-      }
-
-      if (source.startsWith(splitPrefix + ':')) {
-        return source.replace(splitPrefix + ':', '')
-      }
-      return null
-    },
-
     transform(code, id) {
       if (!userConfig.autoCodeSplitting) {
         return null
@@ -131,7 +116,7 @@ export const unpluginRouterCodeSplitterFactory: UnpluginFactory<
       url.searchParams.delete('v')
       id = fileURLToPath(url).replace(/\\/g, '/')
 
-      if (id.includes(splitPrefix)) {
+      if (id.includes(splitToken)) {
         return handleSplittingFile(code, id)
       } else if (
         fileIsInRoutesDirectory(id, userConfig.routesDirectory) &&
@@ -158,15 +143,9 @@ export const unpluginRouterCodeSplitterFactory: UnpluginFactory<
         return undefined
       }
 
-      let id = transformId
-
-      if (id.startsWith(JoinedSplitPrefix)) {
-        id = id.replace(JoinedSplitPrefix, '')
-      }
-
       if (
-        fileIsInRoutesDirectory(id, userConfig.routesDirectory) ||
-        id.includes(splitPrefix)
+        fileIsInRoutesDirectory(transformId, userConfig.routesDirectory) ||
+        transformId.includes(splitToken)
       ) {
         return true
       }
@@ -179,58 +158,19 @@ export const unpluginRouterCodeSplitterFactory: UnpluginFactory<
 
         userConfig = getConfig(options, ROOT)
       },
+      // handleHotUpdate({ file, server, modules }) {
+      //   return []
+      // },
     },
 
-    rspack(compiler) {
+    rspack() {
       ROOT = process.cwd()
-
-      compiler.hooks.beforeCompile.tap(PLUGIN_NAME, (self) => {
-        self.normalModuleFactory.hooks.beforeResolve.tap(
-          PLUGIN_NAME,
-          (resolveData: { request: string }) => {
-            if (resolveData.request.includes(JoinedSplitPrefix)) {
-              resolveData.request = resolveData.request.replace(
-                JoinedSplitPrefix,
-                '',
-              )
-            }
-          },
-        )
-      })
-
       userConfig = getConfig(options, ROOT)
     },
 
-    webpack(compiler) {
+    webpack() {
       ROOT = process.cwd()
-
-      compiler.hooks.beforeCompile.tap(PLUGIN_NAME, (self) => {
-        self.normalModuleFactory.hooks.beforeResolve.tap(
-          PLUGIN_NAME,
-          (resolveData: { request: string }) => {
-            if (resolveData.request.includes(JoinedSplitPrefix)) {
-              resolveData.request = resolveData.request.replace(
-                JoinedSplitPrefix,
-                '',
-              )
-            }
-          },
-        )
-      })
-
       userConfig = getConfig(options, ROOT)
-
-      if (
-        userConfig.autoCodeSplitting &&
-        compiler.options.mode === 'production'
-      ) {
-        compiler.hooks.done.tap(PLUGIN_NAME, () => {
-          console.info('✅ ' + PLUGIN_NAME + ': code-splitting done!')
-          setTimeout(() => {
-            process.exit(0)
-          })
-        })
-      }
     },
   }
 }

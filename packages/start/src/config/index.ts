@@ -1,6 +1,5 @@
 import path from 'node:path'
-import { existsSync, readFileSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import * as fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import reactRefresh from '@vitejs/plugin-react'
 import { resolve } from 'import-meta-resolve'
@@ -25,12 +24,12 @@ import { serverFunctions } from '@vinxi/server-functions/plugin'
 // @ts-expect-error
 import { serverTransform } from '@vinxi/server-functions/server'
 import { z } from 'zod'
+import type * as vite from 'vite'
 import type {
   AppOptions as VinxiAppOptions,
   RouterSchemaInput as VinxiRouterSchemaInput,
 } from 'vinxi'
 import type { Manifest } from '@tanstack/react-router'
-import type * as vite from 'vite'
 import type { NitroOptions } from 'nitropack'
 
 /**
@@ -249,7 +248,7 @@ export function defineConfig(
   const ssrEntry = opts.routers?.ssr?.entry || './app/ssr.tsx'
   const apiEntry = opts.routers?.api?.entry || './app/api.ts'
 
-  const apiEntryExists = existsSync(apiEntry)
+  const apiEntryExists = fs.existsSync(apiEntry)
 
   return createApp({
     server: {
@@ -266,18 +265,38 @@ export function defineConfig(
         dir: './public',
         base: '/',
       },
-      withStartPlugins(tsrConfig)({
-        name: 'client',
-        type: 'client',
-        target: 'browser',
-        handler: clientEntry,
-        base: clientBase,
-        build: {
-          sourcemap: true,
+      withPlugins(
+        {
+          name: 'client',
+          type: 'client',
+          target: 'browser',
+          handler: clientEntry,
+          base: clientBase,
+          build: {
+            sourcemap: true,
+          },
         },
-        plugins: () => [
-          ...(opts.vite?.plugins?.() || []),
-          ...(opts.routers?.client?.vite?.plugins?.() || []),
+        (prev) => [
+          config('start-vite', {
+            ssr: {
+              noExternal: ['@tanstack/start', 'tsr:routes-manifest'],
+            },
+            // optimizeDeps: {
+            //   include: ['@tanstack/start/server-runtime'],
+            // },
+            define: {
+              CLIENT_BASE: JSON.stringify(clientBase),
+            },
+          }),
+          TanStackRouterVite({
+            ...tsrConfig,
+            autoCodeSplitting: true,
+            experimental: {
+              ...tsrConfig.experimental,
+            },
+            enableRouteGeneration: true,
+          }),
+          TanStackStartVite(),
           serverFunctions.client({
             runtime: '@tanstack/start/client-runtime',
           }),
@@ -288,82 +307,150 @@ export function defineConfig(
           }),
           // TODO: RSCS - enable this
           // serverComponents.client(),
+          // This will log the final source of every file that is transformed by Vite
+          // (() => {
+          //   let rootDir = process.cwd()
+
+          //   return {
+          //     name: 'log-final-source',
+          //     enforce: 'post', // Ensures this is one of the last plugins to apply transformations
+          //     configResolved(config: any) {
+          //       // store the root directory of the project
+          //       rootDir = config.root
+          //     },
+          //     resolveId(id: string) {
+          //       console.log(id)
+          //     },
+          //     transform(code: string, id: string) {
+          //       // if we're in dev, write every file to a temp directory for debugging
+          //       if (process.env.NODE_ENV === 'development') {
+          //         const normalizedPath = vite.normalizePath(id)
+
+          //         if (normalizedPath.startsWith(rootDir)) {
+          //           const relativePath = normalizedPath.replace(rootDir, '')
+          //           const filePath = path.join(rootDir, '.temp', relativePath)
+          //           const directoryPath = path.dirname(filePath)
+          //           // Ensure the directory exists
+          //           fs.mkdirSync(directoryPath, {
+          //             recursive: true,
+          //           })
+          //           fs.writeFileSync(filePath, code)
+          //         }
+          //       }
+
+          //       return null // Return null to indicate no transformation is applied
+          //     },
+          //   }
+          // })(),
+          ...prev,
+          ...(opts.vite?.plugins?.() || []),
+          ...(opts.routers?.client?.vite?.plugins?.() || []),
         ],
-      }),
+      ),
       ...(apiEntryExists
         ? [
-            withPlugins([
-              config('start-vite', {
-                ssr: {
-                  noExternal: ['@tanstack/start', 'tsr:routes-manifest'],
-                },
-              }),
-              TanStackRouterVite({
-                ...tsrConfig,
-                autoCodeSplitting: true,
-                experimental: {
-                  ...tsrConfig.experimental,
-                },
-              }),
-            ])({
-              name: 'api',
-              type: 'http',
-              target: 'server',
-              base: apiBase,
-              handler: apiEntry,
-              routes: tsrFileRouter({ tsrConfig, apiBase }),
-              plugins: () => [
+            withPlugins(
+              {
+                name: 'api',
+                type: 'http',
+                target: 'server',
+                base: apiBase,
+                handler: apiEntry,
+                routes: tsrFileRouter({ tsrConfig, apiBase }),
+              },
+              (prev) => [
+                config('start-vite', {
+                  ssr: {
+                    noExternal: ['@tanstack/start', 'tsr:routes-manifest'],
+                  },
+                  define: {
+                    'process.env.CLIENT_BASE': JSON.stringify(clientBase),
+                  },
+                }),
+                TanStackRouterVite({
+                  ...tsrConfig,
+                  autoCodeSplitting: true,
+                  experimental: {
+                    ...tsrConfig.experimental,
+                  },
+                  enableRouteGeneration: false,
+                }),
+                ...prev,
                 ...(opts.vite?.plugins?.() || []),
                 ...(opts.routers?.ssr?.vite?.plugins?.() || []),
-                // serverTransform({
-                //   runtime: '@tanstack/start/server-runtime',
-                // }),
-                // config('start-api', {
-                //   ssr: {
-                //     external: ['@vinxi/react-server-dom/client'],
-                //   },
-                // }),
               ],
-              // link: {
-              //   client: 'client',
-              // },
-            }),
+            ),
           ]
         : []),
-      withStartPlugins(tsrConfig)({
-        name: 'ssr',
-        type: 'http',
-        target: 'server',
-        handler: ssrEntry,
-        plugins: () => [
+      withPlugins(
+        {
+          name: 'ssr',
+          type: 'http',
+          target: 'server',
+          handler: ssrEntry,
+          link: {
+            client: 'client',
+          },
+        },
+        (prev) => [
+          config('start-ssr', {
+            ssr: {
+              noExternal: ['@tanstack/start', 'tsr:routes-manifest'],
+              external: ['@vinxi/react-server-dom/client'],
+            },
+            define: {
+              'process.env.CLIENT_BASE': JSON.stringify(clientBase),
+            },
+          }),
+          TanStackRouterVite({
+            ...tsrConfig,
+            autoCodeSplitting: true,
+            experimental: {
+              ...tsrConfig.experimental,
+            },
+            enableRouteGeneration: true,
+          }),
+          TanStackStartVite(),
           tsrRoutesManifest({
             tsrConfig,
             clientBase,
           }),
-          ...(opts.vite?.plugins?.() || []),
-          ...(opts.routers?.ssr?.vite?.plugins?.() || []),
           serverTransform({
             runtime: '@tanstack/start/server-runtime',
           }),
-          config('start-ssr', {
+          ...prev,
+          ...(opts.vite?.plugins?.() || []),
+          ...(opts.routers?.ssr?.vite?.plugins?.() || []),
+        ],
+      ),
+      withPlugins(
+        {
+          name: 'server',
+          type: 'http',
+          target: 'server',
+          base: serverBase,
+          // TODO: RSCS - enable this
+          // worker: true,
+          handler: importToProjectRelative('@tanstack/start/server-handler'),
+        },
+        (prev) => [
+          config('start-server', {
             ssr: {
-              external: ['@vinxi/react-server-dom/client'],
+              noExternal: ['@tanstack/start', 'tsr:routes-manifest'],
+            },
+            define: {
+              'process.env.CLIENT_BASE': JSON.stringify(clientBase),
             },
           }),
-        ],
-        link: {
-          client: 'client',
-        },
-      }),
-      withStartPlugins(tsrConfig)({
-        name: 'server',
-        type: 'http',
-        target: 'server',
-        base: serverBase,
-        // TODO: RSCS - enable this
-        // worker: true,
-        handler: importToProjectRelative('@tanstack/start/server-handler'),
-        plugins: () => [
+          TanStackRouterVite({
+            ...tsrConfig,
+            autoCodeSplitting: true,
+            experimental: {
+              ...tsrConfig.experimental,
+            },
+            enableRouteGeneration: true,
+          }),
+          TanStackStartVite(),
           serverFunctions.server({
             runtime: '@tanstack/start/react-server-runtime',
             // TODO: RSCS - remove this
@@ -371,23 +458,11 @@ export function defineConfig(
               conditions: [],
             },
           }),
-          // TODO: RSCs - add this
-          // serverComponents.serverActions({
-          //   resolve: {
-          //     conditions: [
-          //       'react-server',
-          //       // 'node',
-          //       'import',
-          //       process.env.NODE_ENV,
-          //     ],
-          //   },
-          //   runtime: '@vinxi/react-server-dom/runtime',
-          //   transpileDeps: ['react', 'react-dom', '@vinxi/react-server-dom'],
-          // }),
+          ...prev,
           ...(opts.vite?.plugins?.() || []),
-          ...(opts.routers?.server?.vite?.plugins?.() || []),
+          ...(opts.routers?.ssr?.vite?.plugins?.() || []),
         ],
-      }),
+      ),
     ],
   })
 }
@@ -408,34 +483,15 @@ type TempRouter = Extract<
   }
 }
 
-function withPlugins(plugins: Array<any>) {
-  return (router: TempRouter) => {
-    return {
-      ...router,
-      plugins: async () => [...plugins, ...((await router.plugins?.()) ?? [])],
-    }
+function withPlugins(
+  router: TempRouter,
+  plugins: (r: Array<any>) => Array<any>,
+) {
+  return {
+    ...router,
+    plugins: async (r: any) =>
+      plugins((await router.plugins?.(r)) || router.plugins || []),
   }
-}
-
-function withStartPlugins(tsrConfig: z.infer<typeof configSchema>) {
-  return withPlugins([
-    config('start-vite', {
-      ssr: {
-        noExternal: ['@tanstack/start', 'tsr:routes-manifest'],
-      },
-      // optimizeDeps: {
-      //   include: ['@tanstack/start/server-runtime'],
-      // },
-    }),
-    TanStackRouterVite({
-      ...tsrConfig,
-      autoCodeSplitting: true,
-      experimental: {
-        ...tsrConfig.experimental,
-      },
-    }),
-    TanStackStartVite(),
-  ])
 }
 
 // function resolveRelativePath(p: string) {
@@ -472,7 +528,7 @@ function tsrRoutesManifest(opts: {
       }
       return
     },
-    async load(id) {
+    load(id) {
       if (id === 'tsr:routes-manifest') {
         // If we're in development, return a dummy manifest
 
@@ -498,7 +554,9 @@ function tsrRoutesManifest(opts: {
 
         let manifest: ViteManifest
         try {
-          manifest = JSON.parse(await readFile(clientViteManifestPath, 'utf-8'))
+          manifest = JSON.parse(
+            fs.readFileSync(clientViteManifestPath, 'utf-8'),
+          )
         } catch (err) {
           console.error(err)
           throw new Error(
@@ -510,7 +568,7 @@ function tsrRoutesManifest(opts: {
 
         let routeTreeContent: string
         try {
-          routeTreeContent = readFileSync(routeTreePath, 'utf-8')
+          routeTreeContent = fs.readFileSync(routeTreePath, 'utf-8')
         } catch (err) {
           throw new Error(
             `Could not find the generated route tree at '${routeTreePath}'!`,

@@ -4,7 +4,7 @@ import _generate from '@babel/generator'
 import * as template from '@babel/template'
 import { deadCodeElimination } from 'babel-dead-code-elimination'
 
-import { splitPrefix } from '../constants'
+import { splitToken } from '../constants'
 import { parseAst } from './ast'
 import type { ParseAstOptions } from './ast'
 
@@ -49,7 +49,7 @@ export function compileCodeSplitReferenceRoute(opts: ParseAstOptions) {
       enter(programPath, programState) {
         const state = programState as unknown as State
 
-        const splitUrl = `${splitPrefix}:${opts.filename}?${splitPrefix}`
+        const splitUrl = `${opts.filename}?${splitToken}`
 
         /**
          * If the component for the route is being imported from
@@ -84,8 +84,6 @@ export function compileCodeSplitReferenceRoute(opts: ParseAstOptions) {
                   path,
                   path.parentPath.node.arguments[0],
                 )
-
-                let found = false
 
                 const hasImportedOrDefinedIdentifier = (name: string) => {
                   return programPath.scope.hasBinding(name)
@@ -150,14 +148,6 @@ export function compileCodeSplitReferenceRoute(opts: ParseAstOptions) {
                             prop.value = template.expression(
                               `lazyRouteComponent($$splitComponentImporter, 'component')`,
                             )()
-
-                            programPath.pushContainer('body', [
-                              template.statement(
-                                `function DummyComponent() { return null }`,
-                              )(),
-                            ])
-
-                            found = true
                           }
                         } else if (prop.key.name === 'loader') {
                           const value = prop.value
@@ -207,8 +197,6 @@ export function compileCodeSplitReferenceRoute(opts: ParseAstOptions) {
                             prop.value = template.expression(
                               `lazyFn($$splitLoaderImporter, 'loader')`,
                             )()
-
-                            found = true
                           }
                         }
                       }
@@ -218,11 +206,13 @@ export function compileCodeSplitReferenceRoute(opts: ParseAstOptions) {
                   })
                 }
 
-                if (found as boolean) {
-                  programPath.pushContainer('body', [
-                    template.statement(`function TSR_Dummy_Component() {}`)(),
-                  ])
-                }
+                // if (found as boolean) {
+                // }
+                programPath.pushContainer('body', [
+                  template.statement(
+                    `export function TSR_Dummy_Component() { return null }`,
+                  )(),
+                ])
               }
             },
           },
@@ -362,23 +352,24 @@ export function compileCodeSplitVirtualRoute(opts: ParseAstOptions) {
             splitNode = binding?.path.node
           }
 
+          let componentId =
+            splitType === 'component' ? 'SplitComponent' : 'SplitLoader'
+
           // Add the node to the program
           if (splitNode) {
             if (t.isFunctionDeclaration(splitNode)) {
+              componentId = splitNode.id?.name || 'SplitComponent'
               programPath.pushContainer(
                 'body',
-                t.variableDeclaration('const', [
-                  t.variableDeclarator(
-                    t.identifier(splitType),
-                    t.functionExpression(
-                      splitNode.id || null, // Anonymize the function expression
-                      splitNode.params,
-                      splitNode.body,
-                      splitNode.generator,
-                      splitNode.async,
-                    ),
-                  ),
-                ]),
+                // Push the function declaration to the program
+                // but change the name to the componentId
+                t.functionDeclaration(
+                  t.identifier(componentId),
+                  splitNode.params,
+                  splitNode.body,
+                  splitNode.generator,
+                  splitNode.async,
+                ),
               )
             } else if (
               t.isFunctionExpression(splitNode) ||
@@ -388,7 +379,7 @@ export function compileCodeSplitVirtualRoute(opts: ParseAstOptions) {
                 'body',
                 t.variableDeclaration('const', [
                   t.variableDeclarator(
-                    t.identifier(splitType),
+                    t.identifier(componentId),
                     splitNode as any,
                   ),
                 ]),
@@ -401,7 +392,7 @@ export function compileCodeSplitVirtualRoute(opts: ParseAstOptions) {
                 'body',
                 t.variableDeclaration('const', [
                   t.variableDeclarator(
-                    t.identifier(splitType),
+                    t.identifier(componentId),
                     splitNode.local,
                   ),
                 ]),
@@ -429,7 +420,7 @@ export function compileCodeSplitVirtualRoute(opts: ParseAstOptions) {
                 programPath.pushContainer(
                   'body',
                   t.variableDeclaration('const', [
-                    t.variableDeclarator(t.identifier(splitType), expression),
+                    t.variableDeclarator(t.identifier(componentId), expression),
                   ]),
                 )
               } else {
@@ -453,7 +444,7 @@ export function compileCodeSplitVirtualRoute(opts: ParseAstOptions) {
           programPath.pushContainer('body', [
             t.exportNamedDeclaration(null, [
               t.exportSpecifier(
-                t.identifier(splitType),
+                t.identifier(componentId),
                 t.identifier(splitType),
               ),
             ]),
@@ -478,7 +469,7 @@ export function compileCodeSplitVirtualRoute(opts: ParseAstOptions) {
                       ),
                     ),
                     t.stringLiteral(
-                      opts.filename.split(`?${splitPrefix}`)[0] as string,
+                      opts.filename.split(`?${splitToken}`)[0] as string,
                     ),
                   ),
                 )
@@ -502,7 +493,7 @@ export function compileCodeSplitVirtualRoute(opts: ParseAstOptions) {
       return str
     }, '')
 
-    const warningMessage = `These exports from "${opts.filename.replace('?' + splitPrefix, '')}" are not being code-split and will increase your bundle size: ${list}\nThese should either have their export statements removed or be imported from another file that is not a route.`
+    const warningMessage = `These exports from "${opts.filename.replace('?' + splitToken, '')}" are not being code-split and will increase your bundle size: ${list}\nThese should either have their export statements removed or be imported from another file that is not a route.`
     console.warn(warningMessage)
 
     // append this warning to the file using a template

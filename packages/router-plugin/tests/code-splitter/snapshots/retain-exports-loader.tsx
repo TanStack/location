@@ -1,4 +1,4 @@
-const $$splitComponentImporter = () => import('tsr-split:retain-exports-loader.tsx?tsr-split');
+const $$splitComponentImporter = () => import('retain-exports-loader.tsx?tsr-split');
 import { lazyRouteComponent } from '@tanstack/react-router';
 import { createFileRoute } from '@tanstack/react-router';
 export function loaderFn() {
@@ -12,3 +12,6 @@ export const Route = createFileRoute('/_layout')({
 });
 export const SIDEBAR_WIDTH = '150px';
 export const SIDEBAR_MINI_WIDTH = '80px';
+export function TSR_Dummy_Component() {
+  return null;
+}
