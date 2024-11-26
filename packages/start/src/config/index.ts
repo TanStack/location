@@ -28,6 +28,13 @@ import { serverFunctions } from '@vinxi/server-functions/plugin'
 // @ts-expect-error
 import { serverTransform } from '@vinxi/server-functions/server'
 import { z } from 'zod'
+import {
+  PUBLIC_TANSTACK_START_DTS_FILENAME,
+  TANSTACK_DIR_NAME,
+  setupFrameworkTypesFile,
+} from './setup-fw-types.js'
+import { envValidationSchema, tsrValidateEnvPlugin } from './env/plugin.js'
+import { booleanEnv, stringEnv } from './env/schema.js'
 import type {
   AppOptions as VinxiAppOptions,
   RouterSchemaInput as VinxiRouterSchemaInput,
@@ -37,6 +44,8 @@ import type * as vite from 'vite'
 import type { NitroOptions } from 'nitropack'
 
 import type { CustomizableConfig } from 'vinxi/dist/types/lib/vite-dev'
+
+export const envValue = { string: stringEnv, boolean: booleanEnv }
 
 type RouterType = 'client' | 'server' | 'ssr' | 'api'
 
@@ -213,7 +222,7 @@ const routersSchema = z.object({
 })
 
 const tsrConfig = configSchema.partial().extend({
-  appDirectory: z.string().optional(),
+  appDirectory: z.string().default('./app').optional(),
 })
 
 const inlineConfigSchema = z.object({
@@ -222,6 +231,11 @@ const inlineConfigSchema = z.object({
   tsr: tsrConfig.optional(),
   routers: routersSchema.optional(),
   server: serverSchema.optional(),
+  env: z
+    .object({
+      schema: envValidationSchema.optional(),
+    })
+    .optional(),
 })
 
 export type TanStackStartInputConfig = z.input<typeof inlineConfigSchema>
@@ -273,6 +287,8 @@ function mergeSsrOptions(options: Array<vite.SSROptions | undefined>) {
 export function defineConfig(inlineConfig: TanStackStartInputConfig = {}) {
   const opts = inlineConfigSchema.parse(inlineConfig)
 
+  const root = process.cwd()
+
   const { preset: configDeploymentPreset, ...serverOptions } =
     serverSchema.parse(opts.server || {})
 
@@ -298,6 +314,15 @@ export function defineConfig(inlineConfig: TanStackStartInputConfig = {}) {
 
   const publicDir = opts.routers?.public?.dir || './public'
   const publicBase = opts.routers?.public?.base || '/'
+
+  const tanstackFolderExists = existsSync(path.join(root, TANSTACK_DIR_NAME))
+  const tanstackDTsFileExists = existsSync(
+    path.join(appDirectory, PUBLIC_TANSTACK_START_DTS_FILENAME),
+  )
+
+  if (!tanstackDTsFileExists || !tanstackFolderExists) {
+    setupFrameworkTypesFile({ root, appDirectory })
+  }
 
   return createApp({
     server: {
@@ -328,6 +353,10 @@ export function defineConfig(inlineConfig: TanStackStartInputConfig = {}) {
           sourcemap: true,
         },
         plugins: () => [
+          tsrValidateEnvPlugin({
+            configOptions: { ...opts, tsr },
+            root,
+          }),
           ...(getUserConfig(opts.vite).plugins || []),
           ...(getUserConfig(opts.routers?.client?.vite).plugins || []),
           serverFunctions.client({
@@ -345,6 +374,10 @@ export function defineConfig(inlineConfig: TanStackStartInputConfig = {}) {
       ...(apiEntryExists
         ? [
             withPlugins([
+              tsrValidateEnvPlugin({
+                configOptions: { ...opts, tsr },
+                root,
+              }),
               config('start-vite', {
                 ...getUserConfig(opts.vite).userConfig,
                 ...getUserConfig(opts.routers?.api?.vite).userConfig,
@@ -401,6 +434,10 @@ export function defineConfig(inlineConfig: TanStackStartInputConfig = {}) {
         target: 'server',
         handler: ssrEntry,
         plugins: () => [
+          tsrValidateEnvPlugin({
+            configOptions: { ...opts, tsr },
+            root,
+          }),
           tsrRoutesManifest({
             tsrConfig,
             clientBase,
@@ -432,6 +469,11 @@ export function defineConfig(inlineConfig: TanStackStartInputConfig = {}) {
         // worker: true,
         handler: importToProjectRelative('@tanstack/start/server-handler'),
         plugins: () => [
+          tsrValidateEnvPlugin({
+            configOptions: { ...opts, tsr },
+            root,
+            write: true,
+          }),
           serverFunctions.server({
             runtime: '@tanstack/start/react-server-runtime',
             // TODO: RSCS - remove this
