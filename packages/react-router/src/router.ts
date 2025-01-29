@@ -1881,8 +1881,11 @@ export class Router<
         try {
           const next = this.latestLocation
           const prevLocation = this.state.resolvedLocation
+          const actualBrowserLocation = this.state.location
           const hrefChanged = prevLocation.href !== next.href
           const pathChanged = prevLocation.pathname !== next.pathname
+          const browserLocationChanged =
+            actualBrowserLocation.href !== next.href
 
           // Cancel any pending matches
           this.cancelMatches()
@@ -1936,6 +1939,9 @@ export class Router<
             // eslint-disable-next-line @typescript-eslint/require-await
             onReady: async () => {
               // eslint-disable-next-line @typescript-eslint/require-await
+              const hasPendingFetches = this.state.pendingMatches?.some(
+                (match) => !!match.isFetching,
+              )
               this.startViewTransition(async () => {
                 // this.viewTransitionPromise = createControlledPromise<true>()
 
@@ -1966,7 +1972,10 @@ export class Router<
                       isLoading: false,
                       loadedAt: Date.now(),
                       matches: newMatches,
-                      pendingMatches: undefined,
+                      pendingMatches:
+                        hasPendingFetches && browserLocationChanged
+                          ? s.pendingMatches
+                          : undefined,
                       cachedMatches: [
                         ...s.cachedMatches,
                         ...exitingMatches.filter((d) => d.status !== 'error'),
@@ -2136,8 +2145,14 @@ export class Router<
     let rendered = false
 
     const triggerOnReady = async () => {
+      const hasPendingFetches = this.state.pendingMatches?.some(
+        (match) => !!match.isFetching,
+      )
+
       if (!rendered) {
-        rendered = true
+        if (!hasPendingFetches) {
+          rendered = true
+        }
         await onReady?.()
       }
     }
